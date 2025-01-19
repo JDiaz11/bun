@@ -1,16 +1,17 @@
 #/usr/bin/env bash
 
-
 _file_arguments() {
-    shopt -s extglob globstar
-    local extensions="${1}";
+    local extensions="${1}"
+    local reset=$(shopt -p globstar)
+    shopt -s globstar
 
     if [[ -z "${cur_word}" ]]; then
         COMPREPLY=( $(compgen -fG -X "${extensions}" -- "${cur_word}") );
     else
         COMPREPLY=( $(compgen -f -X "${extensions}" -- "${cur_word}") );
     fi
-    shopt -u extglob globstar
+
+    $reset
 }
 
 _long_short_completion() {
@@ -38,15 +39,13 @@ _read_scripts_in_package_json() {
         [[ "${COMP_WORDS[${line}]}" == "--cwd" ]] && working_dir="${COMP_WORDS[$((line + 1))]}";
     done
 
-    [[ -f "${working_dir}/package.json" ]] && package_json=$(<${working_dir}/package.json);
+    [[ -f "${working_dir}/package.json" ]] && package_json=$(<"${working_dir}/package.json");
 
     [[ "${package_json}" =~ "\"scripts\""[[:space:]]*":"[[:space:]]*\{(.*)\} ]] && {
         local package_json_compreply;
         local matched="${BASH_REMATCH[@]:1}";
         local scripts="${matched%%\}*}";
-        shopt -s extglob;
         scripts="${scripts//@(\"|\')/}";
-        shopt -u extglob;
         readarray -td, scripts <<<"${scripts}";
         for completion in "${scripts[@]}"; do
             package_json_compreply+=( "${completion%:*}" );
@@ -81,19 +80,23 @@ _subcommand_comp_reply() {
 _bun_completions() {
     declare -A GLOBAL_OPTIONS;
     declare -A PACKAGE_OPTIONS;
+    declare -A PM_OPTIONS;
 
-    local SUBCOMMANDS="dev bun create run install add remove upgrade completions discord help";
+    local SUBCOMMANDS="dev bun create run install add remove upgrade completions discord help init pm x test repl update outdated link unlink build";
 
-    GLOBAL_OPTIONS[LONG_OPTIONS]="--use --cwd --bunfile --server-bunfile --config --disable-react-fast-refresh --disable-hmr --extension-order --jsx-factory --jsx-fragment --extension-order --jsx-factory --jsx-fragment --jsx-import-source --jsx-production --jsx-runtime --main-fields --no-summary --version --platform --public-dir --tsconfig-override --define --external --help --inject --loader --origin --port --dump-environment-variables --dump-limits --disable-bun-js";
+    GLOBAL_OPTIONS[LONG_OPTIONS]="--use --cwd --bunfile --server-bunfile --config --disable-react-fast-refresh --disable-hmr --env-file --extension-order --jsx-factory --jsx-fragment --extension-order --jsx-factory --jsx-fragment --jsx-import-source --jsx-production --jsx-runtime --main-fields --no-summary --version --platform --public-dir --tsconfig-override --define --external --help --inject --loader --origin --port --dump-environment-variables --dump-limits --disable-bun-js";
     GLOBAL_OPTIONS[SHORT_OPTIONS]="-c -v -d -e -h -i -l -u -p";
 
-    PACKAGE_OPTIONS[ADD_OPTIONS_LONG]="--development --optional";
+    PACKAGE_OPTIONS[ADD_OPTIONS_LONG]="--development --optional --peer";
     PACKAGE_OPTIONS[ADD_OPTIONS_SHORT]="-d";
     PACKAGE_OPTIONS[REMOVE_OPTIONS_LONG]="";
     PACKAGE_OPTIONS[REMOVE_OPTIONS_SHORT]="";
 
-    PACKAGE_OPTIONS[SHARED_OPTIONS_LONG]="--config --yarn --production --no-save --dry-run --lockfile --force --cache-dir --no-cache --silent --verbose --global --cwd --backend --link-native-bins --help";
+    PACKAGE_OPTIONS[SHARED_OPTIONS_LONG]="--config --yarn --production --frozen-lockfile --no-save --dry-run --force --cache-dir --no-cache --silent --verbose --global --cwd --backend --link-native-bins --help";
     PACKAGE_OPTIONS[SHARED_OPTIONS_SHORT]="-c -y -p -f -g";
+
+    PM_OPTIONS[LONG_OPTIONS]="--config --yarn --production --frozen-lockfile --no-save --dry-run --force --cache-dir --no-cache --silent --verbose --no-progress --no-summary --no-verify --ignore-scripts --global --cwd --backend --link-native-bins --help"
+    PM_OPTIONS[SHORT_OPTIONS]="-c -y -p -f -g"
 
     local cur_word="${COMP_WORDS[${COMP_CWORD}]}";
     local prev="${COMP_WORDS[$(( COMP_CWORD - 1 ))]}";
@@ -106,7 +109,7 @@ _bun_completions() {
         --backend)
             case "${COMP_WORDS[1]}" in
                 a|add|remove|rm|install|i)
-                    COMPREPLY=( $(compgen -W "clonefile copyfile hardlink clonefile_each_dir" -- "${cur_word}") );
+                    COMPREPLY=( $(compgen -W "clonefile copyfile hardlink clonefile_each_dir symlink" -- "${cur_word}") );
                     ;;
             esac
             return ;;
@@ -116,8 +119,8 @@ _bun_completions() {
         --jsx-runtime)
             COMPREPLY=( $(compgen -W "automatic classic" -- "${cur_word}") );
             return;;
-        --platform)
-            COMPREPLY=( $(compgen -W "browser node" -- "${cur_word}") );
+        --target)
+            COMPREPLY=( $(compgen -W "browser node bun" -- "${cur_word}") );
             return;;
         -l|--loader)
             [[ "${cur_word}" =~ (:) ]] && {
@@ -134,7 +137,7 @@ _bun_completions() {
                 "${PACKAGE_OPTIONS[ADD_OPTIONS_LONG]} ${PACKAGE_OPTIONS[ADD_OPTIONS_SHORT]} ${PACKAGE_OPTIONS[SHARED_OPTIONS_LONG]} ${PACKAGE_OPTIONS[SHARED_OPTIONS_SHORT]}" \
                 "${PACKAGE_OPTIONS[ADD_OPTIONS_SHORT]} ${PACKAGE_OPTIONS[SHARED_OPTIONS_SHORT]}"
             return;;
-        remove|rm|i|install)
+        remove|rm|i|install|link|unlink)
             _long_short_completion \
                 "${PACKAGE_OPTIONS[REMOVE_OPTIONS_LONG]} ${PACKAGE_OPTIONS[REMOVE_OPTIONS_SHORT]} ${PACKAGE_OPTIONS[SHARED_OPTIONS_LONG]} ${PACKAGE_OPTIONS[SHARED_OPTIONS_SHORT]}" \
                 "${PACKAGE_OPTIONS[REMOVE_OPTIONS_SHORT]} ${PACKAGE_OPTIONS[SHARED_OPTIONS_SHORT]}";
@@ -149,6 +152,11 @@ _bun_completions() {
             _file_arguments "!(*.@(js|ts|jsx|tsx|mjs|cjs)?($|))";
             COMPREPLY+=( $(compgen -W "--version --cwd --help --silent -v -h" -- "${cur_word}" ) );
             _read_scripts_in_package_json;
+            return;;
+        pm)
+            _long_short_completion \
+                "${PM_OPTIONS[LONG_OPTIONS]} ${PM_OPTIONS[SHORT_OPTIONS]}";
+            COMPREPLY+=( $(compgen -W "bin ls cache hash hash-print hash-string" -- "${cur_word}") );
             return;;
         *)
             local replaced_script;

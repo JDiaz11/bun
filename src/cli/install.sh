@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+platform=$(uname -ms)
+
 if [[ ${OS:-} = Windows_NT ]]; then
-    echo 'error: Please install bun using Windows Subsystem for Linux'
-    exit 1
+  if [[ $platform != MINGW64* ]]; then
+    powershell -c "irm bun.sh/install.ps1|iex"
+    exit $?
+  fi
 fi
 
 # Reset
@@ -50,13 +54,13 @@ success() {
 }
 
 command -v unzip >/dev/null ||
-    error 'unzip is required to install bun (see: https://github.com/oven-sh/bun#unzip-is-required)'
+    error 'unzip is required to install bun'
 
-if [[ $# -gt 1 ]]; then
-    error 'Too many arguments, only 1 is allowed, which can be a specific tag of bun to install (e.g. "bun-v0.1.4")'
+if [[ $# -gt 2 ]]; then
+    error 'Too many arguments, only 2 are allowed. The first can be a specific tag of bun to install. (e.g. "bun-v0.1.4") The second can be a build variant of bun to install. (e.g. "debug-info")'
 fi
 
-case $(uname -ms) in
+case $platform in
 'Darwin x86_64')
     target=darwin-x64
     ;;
@@ -66,33 +70,56 @@ case $(uname -ms) in
 'Linux aarch64' | 'Linux arm64')
     target=linux-aarch64
     ;;
+'MINGW64'*)
+    target=windows-x64
+    ;;
 'Linux x86_64' | *)
     target=linux-x64
     ;;
 esac
 
+case "$target" in
+'linux'*)
+    if [ -f /etc/alpine-release ]; then
+        target="$target-musl"
+    fi
+    ;;
+esac
+
 if [[ $target = darwin-x64 ]]; then
     # Is this process running in Rosetta?
-    if [[ $(sysctl -n sysctl.proc_translated) = 1 ]]; then
+    # redirect stderr to devnull to avoid error message when not running in Rosetta
+    if [[ $(sysctl -n sysctl.proc_translated 2>/dev/null) = 1 ]]; then
         target=darwin-aarch64
         info "Your shell is running in Rosetta 2. Downloading bun for $target instead"
     fi
 fi
 
-github_repo="https://github.com/oven-sh/bun"
+GITHUB=${GITHUB-"https://github.com"}
 
-if [[ $target = darwin-x64 ]]; then
-    # If AVX2 isn't supported, use the -baseline build
-    if [[ $(sysctl -n machdep.cpu.features) != *avx2* ]]; then
-        target=darwin-x64-baseline
+github_repo="$GITHUB/oven-sh/bun"
+
+# If AVX2 isn't supported, use the -baseline build
+case "$target" in
+'darwin-x64'*)
+    if [[ $(sysctl -a | grep machdep.cpu | grep AVX2) == '' ]]; then
+        target="$target-baseline"
     fi
-fi
-
-if [[ $target = linux-x64 ]]; then
+    ;;
+'linux-x64'*)
     # If AVX2 isn't supported, use the -baseline build
     if [[ $(cat /proc/cpuinfo | grep avx2) = '' ]]; then
-        target=linux-x64-baseline
+        target="$target-baseline"
     fi
+    ;;
+esac
+
+exe_name=bun
+
+if [[ $# = 2 && $2 = debug-info ]]; then
+    target=$target-profile
+    exe_name=bun-profile
+    info "You requested a debug build of bun. More information will be shown if a crash occurs."
 fi
 
 if [[ $# = 0 ]]; then
@@ -119,7 +146,7 @@ curl --fail --location --progress-bar --output "$exe.zip" "$bun_uri" ||
 unzip -oqd "$bin_dir" "$exe.zip" ||
     error 'Failed to extract bun'
 
-mv "$bin_dir/bun-$target/bun" "$exe" ||
+mv "$bin_dir/bun-$target/$exe_name" "$exe" ||
     error 'Failed to move extracted bun to destination'
 
 chmod +x "$exe" ||
@@ -223,6 +250,58 @@ zsh)
         done
     fi
     ;;
+bash)
+    # Install completions, but we don't care if it fails
+    IS_BUN_AUTO_UPDATE=true SHELL=bash $exe completions &>/dev/null || :
+
+    commands=(
+        "export $install_env=$quoted_install_dir"
+        "export PATH=\"$bin_env:\$PATH\""
+    )
+
+    bash_configs=(
+        "$HOME/.bashrc"
+        "$HOME/.bash_profile"
+    )
+
+    if [[ ${XDG_CONFIG_HOME:-} ]]; then
+        bash_configs+=(
+            "$XDG_CONFIG_HOME/.bash_profile"
+            "$XDG_CONFIG_HOME/.bashrc"
+            "$XDG_CONFIG_HOME/bash_profile"
+            "$XDG_CONFIG_HOME/bashrc"
+        )
+    fi
+
+    set_manually=true
+    for bash_config in "${bash_configs[@]}"; do
+        tilde_bash_config=$(tildify "$bash_config")
+
+        if [[ -w $bash_config ]]; then
+            {
+                echo -e '\n# bun'
+
+                for command in "${commands[@]}"; do
+                    echo "$command"
+                done
+            } >>"$bash_config"
+
+            info "Added \"$tilde_bin_dir\" to \$PATH in \"$tilde_bash_config\""
+
+            refresh_command="source $bash_config"
+            set_manually=false
+            break
+        fi
+    done
+
+    if [[ $set_manually = true ]]; then
+        echo "Manually add the directory to $tilde_bash_config (or similar):"
+
+        for command in "${commands[@]}"; do
+            info_bold "  $command"
+        done
+    fi
+    ;;
 *)
     echo 'Manually add the directory to ~/.bashrc (or similar):'
     info_bold "  export $install_env=$quoted_install_dir"
@@ -235,7 +314,7 @@ info "To get started, run:"
 echo
 
 if [[ $refresh_command ]]; then
-    info_bold " $refresh_command"
+    info_bold "  $refresh_command"
 fi
 
 info_bold "  bun --help"
